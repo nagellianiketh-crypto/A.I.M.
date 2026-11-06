@@ -1,109 +1,266 @@
-"""A standalone Python version of the Allied Algorithms website.
-Run with: python allied_algorithms_website.py
-Then open: http://localhost:8000
+"""Allied Algorithms A.I.M. website with a secure same-origin backend proxy.
+
+Local run:
+    PLANT_IDENTIFIER_API_URL=https://YOUR-BACKEND.onrender.com python allied_algorithms_website.py
+Open http://localhost:8000
 """
-from http.server import BaseHTTPRequestHandler, HTTPServer
-from urllib.parse import parse_qs
-from html import escape
+import json
+import os
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit
+from urllib.request import Request, urlopen
 
 HOST = "0.0.0.0"
-PORT = 8000
+PORT = int(os.environ.get("PORT", "8000"))
+BACKEND_URL = os.environ.get("PLANT_IDENTIFIER_API_URL", "").rstrip("/")
+MAX_BODY = 12 * 1024 * 1024
 
-
-def page():
-    return """<!doctype html>
+PAGE = r"""<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Allied Algorithms | A.I.M.</title>
+<link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet">
 <style>
-:root { --green:#245c45; --light:#eef5ef; --cream:#fbfaf4; --dark:#18352a; --accent:#d7a84c; }
-* { box-sizing:border-box; }
-body { margin:0; font-family:Arial, sans-serif; color:var(--dark); background:var(--cream); line-height:1.6; }
-header { position:sticky; top:0; z-index:5; background:white; border-bottom:1px solid #dfe8df; }
-.nav { max-width:1100px; margin:auto; padding:16px 24px; display:flex; align-items:center; justify-content:space-between; gap:20px; }
-.logo { font-weight:800; letter-spacing:.06em; color:var(--green); }
-nav a { color:var(--dark); text-decoration:none; margin-left:18px; font-weight:600; }
-.btn { display:inline-block; background:var(--green); color:white; padding:12px 20px; border-radius:8px; text-decoration:none; border:0; cursor:pointer; font-weight:700; }
-.hero { min-height:480px; display:grid; place-items:center; text-align:center; padding:90px 24px; background:linear-gradient(135deg,#dcecdf,#f8f2dc); }
-.hero h1 { font-size:clamp(2.4rem,6vw,5rem); margin:0 0 16px; color:var(--green); }
-.hero p { font-size:1.2rem; max-width:680px; margin:0 auto 28px; }
-section { padding:72px 24px; }
-.wrap { max-width:1100px; margin:auto; }
-.intro { text-align:center; max-width:760px; margin:auto; }
-h2 { color:var(--green); font-size:2rem; margin-top:0; }
-.steps { display:grid; grid-template-columns:repeat(4,1fr); gap:22px; margin-top:32px; }
-.card { background:white; border:1px solid #dfe8df; border-radius:12px; padding:24px; box-shadow:0 4px 14px #18352a12; }
-.number { font-size:2rem; font-weight:800; color:var(--accent); }
-.stats { background:var(--light); }
-.stats-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:24px; text-align:center; }
-.stat { font-size:3rem; font-weight:800; color:var(--green); }
-.dashboard { display:grid; grid-template-columns:1.3fr 1fr; gap:30px; align-items:center; }
-.map { min-height:300px; border-radius:12px; background:#cfe1ce; display:grid; place-items:center; color:var(--green); font-weight:700; border:2px dashed #7ca889; }
-form { display:grid; gap:14px; max-width:650px; margin:24px auto 0; }
-input, textarea { width:100%; padding:13px; border:1px solid #b9cbbd; border-radius:7px; font:inherit; }
-textarea { min-height:120px; }
-footer { background:var(--dark); color:white; padding:36px 24px; text-align:center; }
-footer a { color:white; }
-@media (max-width:760px) { .nav { flex-direction:column; } nav a { margin:0 8px; } .steps,.dashboard,.stats-grid { grid-template-columns:1fr; } }
+:root{--green:#245c45;--light:#eef5ef;--cream:#fbfaf4;--dark:#18352a;--gold:#d7a84c;--muted:#607469}
+*{box-sizing:border-box}body{margin:0;font-family:Arial,sans-serif;color:var(--dark);background:var(--cream);line-height:1.6}
+header{position:sticky;top:0;z-index:5;background:#fff;border-bottom:1px solid #dfe8df}
+.nav{max-width:1120px;margin:auto;padding:15px 22px;display:flex;align-items:center;justify-content:space-between;gap:18px}
+.logo{font-weight:800;letter-spacing:.06em;color:var(--green)}nav{display:flex;gap:18px;flex-wrap:wrap}nav a{color:var(--dark);text-decoration:none;font-weight:600}
+.btn{display:inline-block;background:var(--green);color:white;padding:11px 18px;border-radius:8px;text-decoration:none;border:0;cursor:pointer;font-weight:700;font-size:1rem}
+.btn:disabled{opacity:.55;cursor:wait}.hero{padding:86px 22px;text-align:center;background:linear-gradient(135deg,#dcecdf,#f8f2dc)}
+.hero h1{font-size:clamp(2.8rem,7vw,5rem);margin:0;color:var(--green)}.hero p{max-width:720px;margin:12px auto 24px;font-size:1.15rem}
+section{padding:66px 22px}.wrap{max-width:1120px;margin:auto}h2{color:var(--green);font-size:2rem;margin:0 0 12px}.intro{text-align:center;max-width:780px;margin:auto}
+.steps,.two-col{display:grid;grid-template-columns:repeat(4,1fr);gap:18px;margin-top:28px}.card{background:white;border:1px solid #dfe8df;border-radius:13px;padding:23px;box-shadow:0 4px 14px #18352a10}
+.number{font-size:2rem;font-weight:800;color:var(--gold)}.soft{background:#f1f6f1}.two-col{grid-template-columns:1fr 1fr}.muted{color:var(--muted);font-size:.94rem}
+label{display:block;font-weight:650;margin:10px 0 5px}input[type=file],input[type=text],textarea{width:100%;padding:12px;border:1px solid #b9cbbd;border-radius:7px;font:inherit;background:#fff}
+input[type=checkbox]{width:auto;margin-right:8px} .check{font-weight:500;display:flex;align-items:flex-start;gap:4px;margin:12px 0}
+.status{padding:12px 14px;border-radius:8px;background:#edf3ed;margin:14px 0;white-space:pre-wrap}.status.error{background:#fff0ed;color:#8a2d20}
+.hidden{display:none!important}#map{height:390px;border-radius:12px;border:1px solid #cbd9cc;overflow:hidden;background:#dce9dc}
+.result-list{padding-left:20px}.pill{display:inline-block;padding:4px 9px;border-radius:20px;background:#e6f0e8;color:var(--green);font-size:.85rem;font-weight:700}
+footer{background:var(--dark);color:white;padding:34px 22px;text-align:center}
+@media(max-width:760px){.nav{flex-direction:column}nav{justify-content:center}.steps,.two-col{grid-template-columns:1fr}.hero{padding:62px 18px}}
 </style>
 </head>
 <body>
-<header><div class="nav"><div class="logo">ALLIED ALGORITHMS</div><nav>
-<a href="#about">About</a><a href="#how">How to Use</a><a href="#dashboard">Dashboard</a><a class="btn" href="#report">Submit a Sighting</a>
-</nav></div></header>
-
+<header><div class="nav"><div class="logo">ALLIED ALGORITHMS</div><nav><a href="#about">About</a><a href="#how">How it works</a><a href="#scanner">Plant scanner</a><a href="#map-section">Map</a></nav></div></header>
 <main>
-<section class="hero"><div><h1>A.I.M.</h1><p>Allied Invasive Mapping</p><p>Help make it easier for people to recognize, locate, and report Multiflora Rose plants.</p><a class="btn" href="#report">Submit a Sighting</a></div></section>
-
-<section id="about"><div class="wrap intro"><h2>Our goal</h2><p>Our goal is to make it easier for people to recognize and report invasive plants. Use this site to identify Multiflora Rose, locate a plant, submit observations, and verify the data.</p></div></section>
-
-<section id="how" style="background:#f1f6f1"><div class="wrap"><h2>How to Use</h2><div class="steps">
-<div class="card"><div class="number">01</div><h3>Identify the Plant</h3><p>Locate a Multiflora Rose plant by its distinctive features.</p></div>
-<div class="card"><div class="number">02</div><h3>Map the Location</h3><p>Use the interactive map to record where the plant was found.</p></div>
-<div class="card"><div class="number">03</div><h3>Submit the Report</h3><p>Fill out the form with the site name, date, observations, and other details.</p></div>
-<div class="card"><div class="number">04</div><h3>Verify the Data</h3><p>Review submitted details and confirm the report.</p></div>
+<section class="hero"><div class="wrap"><span class="pill">ALLIED INVASIVE MAPPING</span><h1>A.I.M.</h1><p>Identify possible Multiflora Rose, review safe removal guidance, and choose whether to submit a location sighting.</p><a class="btn" href="#scanner">Open Plant Scanner</a></div></section>
+<section id="about"><div class="wrap intro"><h2>Protect native plants and habitats</h2><p>A.I.M. helps people identify and report invasive Multiflora Rose. The plant scanner sends an image to the connected identification backend. Location is never requested during a scan; it is requested only if you choose to submit a sighting.</p></div></section>
+<section id="how" class="soft"><div class="wrap"><h2>How A.I.M. works</h2><div class="steps">
+<div class="card"><div class="number">01</div><h3>Identify</h3><p>Upload a clear plant photo for an AI-assisted identification.</p></div>
+<div class="card"><div class="number">02</div><h3>Review Prompt A</h3><p>If Multiflora Rose is a candidate, review the specialized net-cutter guidance and safety reminders.</p></div>
+<div class="card"><div class="number">03</div><h3>Choose Prompt B</h3><p>Separately choose whether to share a sighting on the map and/or authorize environmental-group sharing.</p></div>
+<div class="card"><div class="number">04</div><h3>Report</h3><p>Only after your choice and device location permission can the sighting coordinates be submitted.</p></div>
 </div></div></section>
-
-<section class="stats"><div class="wrap"><div class="stats-grid"><div class="card"><div class="stat">10</div><div>Total Reported</div></div><div class="card"><div class="stat">10</div><div>Map Markers</div></div></div></div></section>
-
-<section id="dashboard"><div class="wrap dashboard"><div><h2>Location Dashboard</h2><p>Explore reported Multiflora Rose locations and help build a clearer picture of invasive plant activity.</p><div class="map">Interactive map area</div></div><div class="card"><div class="stat">10</div><p>Total reported sightings</p></div></div></section>
-
-<section id="report" style="background:#f1f6f1"><div class="wrap intro"><h2>Report a Sighting</h2><p>Submit your observations of Multiflora Rose or invasive plants in your area.</p><form method="post"><input name="site_name" placeholder="Site name" required><input name="date" type="date" required><textarea name="observations" placeholder="Observations" required></textarea><button class="btn" type="submit">Submit Report</button></form></div></section>
+<section id="scanner"><div class="wrap two-col">
+<div class="card"><h2>AI Plant Scanner</h2><p>Upload a JPEG, PNG, or WebP image (maximum 10 MB).</p>
+<form id="scan-form"><label for="plant-image">Plant image</label><input id="plant-image" name="file" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" required><p class="muted">Your image is sent to the configured plant-identification backend. This demo does not request GPS during scanning.</p><button class="btn" id="scan-button" type="submit">Identify Plant</button></form><div id="scan-status" class="status hidden" role="status"></div>
+<div id="scan-result" class="hidden"><h3>Identification results</h3><p id="species-result"></p><p id="candidate-result" class="muted"></p><div id="prompt-a" class="hidden"><h3>Prompt A — Net-Cutter Guidance</h3><p id="prompt-a-title"></p><ul id="guidance-list" class="result-list"></ul><p id="safety-note" class="muted"></p></div></div>
+</div>
+<div class="card"><h2>Prompt B — Optional Location Sharing</h2><p id="consent-intro">Run a scan first. If Multiflora Rose is detected as a candidate, you can decide whether to submit a sighting.</p>
+<div id="consent-panel" class="hidden"><p><strong>Your choices are separate.</strong> Select at least one purpose, or leave this section without submitting anything.</p>
+<label class="check"><input id="map-opt-in" type="checkbox"> I agree to submit this sighting for display on the map.</label>
+<label class="check"><input id="group-opt-in" type="checkbox"> I authorize sharing this sighting with environmental groups.</label>
+<label class="check"><input id="confirm-plant" type="checkbox"> I reviewed the result and confirm this is Multiflora Rose.</label>
+<label for="duration">Consent duration</label><select id="duration"><option value="1">1 day</option><option value="7" selected>7 days</option><option value="14">14 days</option><option value="30">30 days</option></select>
+<button class="btn" id="submit-sighting" type="button">Continue and Share Location</button>
+<p class="muted">Your browser will ask for location permission only after you click this button. You can decline. Consent can be revoked, and the backend deletes associated stored sightings when consent is revoked.</p>
+</div><div id="consent-status" class="status hidden" role="status"></div>
+<button id="revoke-button" class="btn hidden" type="button">Revoke Location Consent</button>
+</div>
+</div></section>
+<section id="map-section" class="soft"><div class="wrap"><h2>Multiflora Rose Location Map</h2><p>Map markers are shown only when map display was selected. The current backend returns sightings for the active consent ID only; this is not yet a shared community-wide map.</p><div id="map"></div><p id="map-status" class="muted">The map is ready. A marker appears after you submit a sighting with map permission.</p></div></section>
 </main>
+<footer><p>ALLIED ALGORITHMS — A.I.M.</p><p>Identify responsibly. Share only with your permission.</p></footer>
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script>
+const $ = (id) => document.getElementById(id);
+let scanIsMultifloraCandidate = false;
+let consentId = null;
+let map = null;
+let marker = null;
 
-<footer><p>123 Eco-Trail, Green Valley, CA 90210</p><p><a href="mailto:hello@multiflora-rose.org">hello@multiflora-rose.org</a></p><p>© 2026 ALLIED ALGORITHMS. ALL RIGHTS RESERVED.</p></footer>
-</body>
-</html>"""
+function showStatus(id, message, error=false) {
+  const el=$(id); el.textContent=message; el.classList.remove('hidden','error');
+  if(error) el.classList.add('error');
+}
+function api(path, options={}) {
+  return fetch('/api'+path, options).then(async response => {
+    const data=await response.json().catch(()=>({detail:'Unexpected server response'}));
+    if(!response.ok) throw new Error(data.detail || ('Request failed: '+response.status));
+    return data;
+  });
+}
+function initMap() {
+  if(map || !window.maplibregl) return;
+  map = new maplibregl.Map({
+    container:'map',
+    style:'https://demotiles.maplibre.org/style.json',
+    center:[-73.35,41.25],
+    zoom:8
+  });
+  map.addControl(new maplibregl.NavigationControl(),'top-right');
+}
+function addMapMarker(longitude, latitude) {
+  initMap();
+  if(!map) return;
+  map.once('load',()=>{});
+  if(marker) marker.remove();
+  marker=new maplibregl.Marker({color:'#245c45'}).setLngLat([longitude,latitude]).addTo(map);
+  map.flyTo({center:[longitude,latitude],zoom:14});
+}
+$('scan-form').addEventListener('submit', async event=>{
+  event.preventDefault();
+  const file=$('plant-image').files[0];
+  if(!file) return;
+  if(file.size>10*1024*1024){showStatus('scan-status','Image must be 10 MB or smaller.',true);return;}
+  $('scan-button').disabled=true;
+  showStatus('scan-status','Identifying plant…');
+  $('scan-result').classList.add('hidden');
+  $('consent-panel').classList.add('hidden');
+  $('consent-status').classList.add('hidden');
+  scanIsMultifloraCandidate=false;
+  consentId=null;
+  try {
+    const form=new FormData(); form.append('file',file);
+    const data=await api('/scan',{method:'POST',body:form});
+    $('species-result').textContent='Top match: '+(data.species||'Unknown')+' — confidence '+Math.round((data.confidence||0)*100)+'%';
+    $('candidate-result').textContent='Multiflora Rose candidate: '+(data.multiflora_rose_candidate?'Yes':'No');
+    $('scan-result').classList.remove('hidden');
+    scanIsMultifloraCandidate=Boolean(data.multiflora_rose_candidate);
+    if(scanIsMultifloraCandidate && data.prompt_a){
+      $('prompt-a-title').textContent=data.prompt_a.title||'Possible Multiflora Rose detected';
+      $('guidance-list').replaceChildren();
+      (data.prompt_a.recommendations||[]).forEach(item=>{const li=document.createElement('li');li.textContent=item;$('guidance-list').appendChild(li);});
+      $('safety-note').textContent=data.prompt_a.safety_note||'';
+      $('prompt-a').classList.remove('hidden');
+      $('consent-panel').classList.remove('hidden');
+      $('consent-intro').textContent='A possible Multiflora Rose was detected. Location sharing is optional and requires your separate permission.';
+      showStatus('scan-status','Scan complete. Review Prompt A and decide whether to submit a sighting.');
+    } else {
+      $('prompt-a').classList.add('hidden');
+      $('consent-intro').textContent='No Multiflora Rose candidate was detected. You can scan another image.';
+      showStatus('scan-status','Scan complete. No Multiflora Rose candidate was detected.');
+    }
+  } catch(error) { showStatus('scan-status',error.message,true); }
+  finally {$('scan-button').disabled=false;}
+});
+$('submit-sighting').addEventListener('click',()=>{
+  if(!scanIsMultifloraCandidate){showStatus('consent-status','Run a scan and confirm a Multiflora Rose candidate first.',true);return;}
+  if(!$('confirm-plant').checked){showStatus('consent-status','Please confirm that you reviewed and verified the plant identification.',true);return;}
+  const mapOpt=$('map-opt-in').checked, groupOpt=$('group-opt-in').checked;
+  if(!mapOpt&&!groupOpt){showStatus('consent-status','Choose at least one sharing purpose, or cancel.',true);return;}
+  if(!navigator.geolocation){showStatus('consent-status','This browser does not support location permission.',true);return;}
+  showStatus('consent-status','Waiting for your device location permission…');
+  navigator.geolocation.getCurrentPosition(async position=>{
+    try{
+      const consent=await api('/consent',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+        map_display_opt_in:mapOpt,
+        environmental_sharing_opt_in:groupOpt,
+        device_location_permission_confirmed:true,
+        duration_days:Number($('duration').value)
+      })});
+      consentId=consent.consent_id;
+      const sighting=await api('/sightings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+        consent_id:consentId,
+        species:'Rosa multiflora',
+        latitude:position.coords.latitude,
+        longitude:position.coords.longitude
+      })});
+      let message='Sighting submitted. Consent expires '+new Date(consent.expires_at).toLocaleString()+'.';
+      if(mapOpt){addMapMarker(position.coords.longitude,position.coords.latitude);$('map-status').textContent='Your consent-authorized sighting is marked on the map.';}
+      if(groupOpt) message+=' Environmental-group sharing was authorized, but automatic email/notifications are not yet implemented in the backend.';
+      showStatus('consent-status',message);
+      $('revoke-button').classList.remove('hidden');
+    }catch(error){showStatus('consent-status',error.message,true);}
+  },error=>{
+    const reason=error.code===1?'You declined location permission. No sighting was submitted.':error.message||'Location could not be obtained.';
+    showStatus('consent-status',reason,true);
+  },{enableHighAccuracy:true,timeout:15000,maximumAge:0});
+});
+$('revoke-button').addEventListener('click',async()=>{
+  if(!consentId)return;
+  try{
+    await api('/consent/revoke',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({consent_id:consentId})});
+    consentId=null;
+    if(marker){marker.remove();marker=null;}
+    $('revoke-button').classList.add('hidden');
+    $('map-status').textContent='Consent revoked. The backend confirms associated stored sightings were deleted.';
+    showStatus('consent-status','Your location consent has been revoked.');
+  }catch(error){showStatus('consent-status',error.message,true);}
+});
+initMap();
+</script>
+</body></html>"""
+
+
+ALLOWED_API = {
+    "/health": {"GET"},
+    "/scan": {"POST"},
+    "/consent": {"POST"},
+    "/sightings": {"GET", "POST"},
+    "/consent/revoke": {"POST"},
+}
 
 
 class SiteHandler(BaseHTTPRequestHandler):
+    def _send(self, status, body, content_type="text/html; charset=utf-8"):
+        encoded = body.encode("utf-8") if isinstance(body, str) else body
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(encoded)))
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        self.wfile.write(encoded)
+
+    def _proxy(self):
+        parsed = urlsplit(self.path)
+        route = parsed.path[len("/api"):]
+        if route not in ALLOWED_API or self.command not in ALLOWED_API[route]:
+            self._send(404, json.dumps({"detail": "API route not found"}), "application/json")
+            return
+        if not BACKEND_URL:
+            self._send(503, json.dumps({"detail": "Backend is not configured. Set PLANT_IDENTIFIER_API_URL in Render."}), "application/json")
+            return
+        length = int(self.headers.get("Content-Length", "0"))
+        if length > MAX_BODY:
+            self._send(413, json.dumps({"detail": "Request is too large"}), "application/json")
+            return
+        body = self.rfile.read(length) if length else None
+        target = BACKEND_URL + route + (("?" + parsed.query) if parsed.query else "")
+        headers = {}
+        if self.headers.get("Content-Type"):
+            headers["Content-Type"] = self.headers["Content-Type"]
+        request = Request(target, data=body, headers=headers, method=self.command)
+        try:
+            with urlopen(request, timeout=65) as response:
+                payload = response.read()
+                content_type = response.headers.get("Content-Type", "application/json")
+                self._send(response.status, payload, content_type)
+        except HTTPError as error:
+            payload = error.read()
+            self._send(error.code, payload, error.headers.get("Content-Type", "application/json"))
+        except (URLError, TimeoutError, OSError):
+            self._send(502, json.dumps({"detail": "Could not reach the plant-identification backend."}), "application/json")
+
     def do_GET(self):
-        if self.path == "/" or self.path.startswith("/?"):
-            body = page().encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+        if self.path.startswith("/api/"):
+            self._proxy()
+        elif self.path == "/" or self.path.startswith("/?"):
+            self._send(200, PAGE)
         else:
-            self.send_error(404)
+            self._send(404, "Not found")
 
     def do_POST(self):
-        length = int(self.headers.get("Content-Length", 0))
-        raw = self.rfile.read(length).decode("utf-8")
-        data = parse_qs(raw)
-        name = escape(data.get("site_name", [""])[0])
-        response = f"<h1>Thank you</h1><p>Your sighting for {name or 'the selected site'} was received.</p><p><a href='/'>Return to the website</a></p>"
-        body = response.encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        if self.path.startswith("/api/"):
+            self._proxy()
+        else:
+            self._send(404, "Not found")
 
 
 if __name__ == "__main__":
-    print(f"Serving Allied Algorithms at http://localhost:{PORT}")
-    HTTPServer((HOST, PORT), SiteHandler).serve_forever()
+    print(f"Serving Allied Algorithms A.I.M. on port {PORT}")
+    ThreadingHTTPServer((HOST, PORT), SiteHandler).serve_forever()
