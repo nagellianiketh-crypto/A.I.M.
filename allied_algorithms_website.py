@@ -72,7 +72,7 @@ footer{background:var(--dark);color:white;padding:34px 22px;text-align:center}
 <button id="revoke-button" class="btn hidden" type="button">Revoke Location Consent</button>
 </div>
 </div></section>
-<section id="map-section" class="soft"><div class="wrap"><h2>Multiflora Rose Location Map</h2><p>Map markers are shown only when map display was selected. The current backend returns sightings for the active consent ID only; this is not yet a shared community-wide map.</p><div id="map"></div><p id="map-status" class="muted">The map is ready. A marker appears after you submit a sighting with map permission.</p></div></section>
+<section id="map-section" class="soft"><div class="wrap"><h2>Multiflora Rose Location Map</h2><p>Community markers show only sightings whose submitters explicitly opted into public map display. Revoked and expired sightings are excluded; public coordinates are approximate.</p><div id="map"></div><p id="map-status" class="muted">Loading community sightings…</p></div></section>
 </main>
 <footer><p>ALLIED ALGORITHMS — A.I.M.</p><p>Identify responsibly. Share only with your permission.</p></footer>
 <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
@@ -82,6 +82,7 @@ let scanIsMultifloraCandidate = false;
 let consentId = null;
 let map = null;
 let marker = null;
+const communityMarkers = [];
 
 function showStatus(id, message, error=false) {
   const el=$(id); el.textContent=message; el.classList.remove('hidden','error');
@@ -103,6 +104,27 @@ function initMap() {
     zoom:8
   });
   map.addControl(new maplibregl.NavigationControl(),'top-right');
+  map.on('load', loadCommunitySightings);
+}
+async function loadCommunitySightings() {
+  if(!map) return;
+  try {
+    const data=await api('/sightings');
+    communityMarkers.forEach(item=>item.remove());
+    communityMarkers.length=0;
+    (data.sightings||[]).forEach(sighting=>{
+      const item=new maplibregl.Marker({color:'#245c45'})
+        .setLngLat([sighting.longitude,sighting.latitude])
+        .setPopup(new maplibregl.Popup().setText(sighting.species+' — '+new Date(sighting.created_at).toLocaleDateString()))
+        .addTo(map);
+      communityMarkers.push(item);
+    });
+    $('map-status').textContent=(data.sightings||[]).length
+      ? 'Showing '+data.sightings.length+' community sighting(s). Locations are approximate.'
+      : 'No active public sightings yet. Only map-authorized reports appear here.';
+  } catch(error) {
+    $('map-status').textContent='Community map could not be loaded: '+error.message;
+  }
 }
 function addMapMarker(longitude, latitude) {
   initMap();
@@ -171,7 +193,7 @@ $('submit-sighting').addEventListener('click',()=>{
         longitude:position.coords.longitude
       })});
       let message='Sighting submitted. Consent expires '+new Date(consent.expires_at).toLocaleString()+'.';
-      if(mapOpt){addMapMarker(position.coords.longitude,position.coords.latitude);$('map-status').textContent='Your consent-authorized sighting is marked on the map.';}
+      if(mapOpt){addMapMarker(position.coords.longitude,position.coords.latitude);await loadCommunitySightings();}
       if(groupOpt) message+=' Environmental-group sharing was authorized, but automatic email/notifications are not yet implemented in the backend.';
       showStatus('consent-status',message);
       $('revoke-button').classList.remove('hidden');
