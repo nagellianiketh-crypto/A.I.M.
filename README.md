@@ -1,37 +1,45 @@
 # Allied Algorithms — A.I.M.
 
-A.I.M. (Allied Invasive Mapping) is the website interface for the Multiflora Rose identification and reporting project.
+A.I.M. (Allied Invasive Mapping) is the browser frontend for the Multiflora Rose identification and reporting project.
 
-## Website deployment (Render)
+## One-service Render deployment
 
-This repository includes `render.yaml` for the website service. In Render, create a Blueprint from this repository and deploy the `allied-algorithms-aim-website` web service.
+The production website and API run together as **one Render web service**.
 
-After the backend has been deployed, set the website service environment variable:
+- Frontend source: `index.html` in this repository.
+- Production frontend copy: `frontend/index.html` in the backend repository.
+- Backend and Render deployment: [Allied-Algorithms-AI-Plant-Identifier](https://github.com/nareddyt1-cell/Allied-Algorithms-AI-Plant-Identifier), branch `backend`.
 
-- `PLANT_IDENTIFIER_API_URL`: the backend service's base URL, for example `https://your-backend-name.onrender.com` (no trailing slash).
+The FastAPI application serves the website at `/` and its API at `/scan`, `/consent`, `/sightings`, `/sightings/public`, and `/consent/revoke`. The frontend calls these same-origin paths directly. There is no separate frontend Render service and no `PLANT_IDENTIFIER_API_URL` proxy setting.
 
-The website uses a same-origin `/api` proxy, so the browser does not need direct cross-origin access to the backend.
+**Important for future frontend edits:** after changing `index.html` here, copy the same contents to `frontend/index.html` in the backend repository's `backend` branch. Render is connected only to that backend repository/branch, so that is the commit that deploys the combined application.
 
-## Backend
+## Deploy configuration
 
-The backend is maintained in [Allied-Algorithms-AI-Plant-Identifier](https://github.com/nareddyt1-cell/Allied-Algorithms-AI-Plant-Identifier). Its `backend` branch includes a Render Blueprint (`render.yaml`) for the FastAPI service.
+Use the existing Render service defined by the backend repository's root `render.yaml`. Do not create a second Render service from this repository.
 
-Deploy that repository separately. The backend Blueprint currently requests a persistent disk for its SQLite database. Render persistent disks require a paid web service; a Free web service cannot attach one. Do not remove persistent storage if you need sightings to survive restarts.
-
-Set the backend's `PLANTNET_API_KEY` environment variable in Render. Keep the key private; do not put it in website JavaScript or commit it to GitHub.
+The backend requires `PLANTNET_API_KEY` in Render. SMTP settings are optional and enable environmental-group email notifications. The backend Blueprint keeps SQLite on its persistent disk at `/var/data/consent.db`; keep that disk attached so sightings survive restarts. Render persistent disks require a paid web-service plan.
 
 ## Website functionality
 
-- Upload a JPEG, PNG, or WebP image to the backend `POST /scan` endpoint.
-- Display identification candidates and Prompt A cutter guidance returned by the backend.
-- Offer Prompt B with separate opt-ins for map display and environmental-group sharing.
-- Request browser geolocation only after the user clicks to continue and confirms the plant.
-- Submit consent and coordinates to the backend only after browser location permission is granted.
-- Allow the user to revoke consent.
-- Display a marker on the map when map display was selected.
+- Upload a JPEG, PNG, or WebP image (maximum 10 MB) for Pl@ntNet identification.
+- Display identification candidates and Prompt A net-cutter guidance.
+- Offer Prompt B with separate opt-ins for public map display and environmental-group sharing.
+- Request browser geolocation only after the user explicitly chooses to submit a sighting.
+- Submit coordinates only after browser location permission and consent.
+- Allow consent revocation.
+- Display active, non-revoked, map-opted-in community sightings using approximate public coordinates.
 
-## Current backend limitations
+## Current prototype limitations
 
-The backend currently uses Pl@ntNet for identification; a separate trained ViT model is not integrated in the code inspected. Environmental-group sharing is recorded as authorized but email/notification delivery is not implemented. The current sightings endpoint returns sightings associated with the submitted consent ID, not a public, community-wide dataset. The map on this website therefore shows the active user's consent-authorized sighting only.
+The backend uses Pl@ntNet; a separate trained ViT classifier is not integrated. Consent IDs are bearer capabilities rather than authenticated user accounts. Review the backend README for privacy and production-readiness limitations.
 
-The backend repository is currently separate from this website repository. Its maintainer must deploy or update it; this website repository cannot change the backend's GitHub files.
+## Local preview
+
+You can preview the static interface with:
+
+```bash
+python -m http.server 8000
+```
+
+That previews the page only. To exercise scanning, consent, and map API calls locally, run the FastAPI backend and serve this page from its `frontend/index.html` path.
