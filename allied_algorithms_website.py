@@ -206,7 +206,14 @@ $('submit-sighting').addEventListener('click',()=>{
       })});
       let message='Sighting submitted. Consent expires '+new Date(consent.expires_at).toLocaleString()+'.';
       if(mapOpt){await loadCommunitySightings();if(map)map.flyTo({center:[position.coords.longitude,position.coords.latitude],zoom:13});}
-      if(groupOpt) message+=' Environmental-group sharing was authorized, but automatic email/notifications are not yet implemented in the backend.';
+      if(groupOpt){
+        const notificationStatus=sighting.environmental_notification_status||'unknown';
+        if(notificationStatus==='sent') message+=' The environmental-group email notification was sent.';
+        else if(notificationStatus==='not_configured') message+=' Environmental-group sharing was authorized, but email notifications are not configured on the backend yet.';
+        else if(notificationStatus==='failed') message+=' The sighting was saved, but the environmental-group email notification failed.';
+        else if(notificationStatus==='duplicate_skipped') message+=' A duplicate environmental-group notification was skipped.';
+        else message+=' Environmental-group sharing was authorized. Notification status: '+notificationStatus+'.';
+      }
       showStatus('consent-status',message);
       $('revoke-button').classList.remove('hidden');
     }catch(error){showStatus('consent-status',error.message,true);}
