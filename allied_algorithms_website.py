@@ -39,6 +39,8 @@ label{display:block;font-weight:650;margin:10px 0 5px}input[type=file],input[typ
 input[type=checkbox]{width:auto;margin-right:8px} .check{font-weight:500;display:flex;align-items:flex-start;gap:4px;margin:12px 0}
 .status{padding:12px 14px;border-radius:8px;background:#edf3ed;margin:14px 0;white-space:pre-wrap}.status.error{background:#fff0ed;color:#8a2d20}
 .hidden{display:none!important}#map{height:390px;border-radius:12px;border:1px solid #cbd9cc;overflow:hidden;background:#dce9dc}
+.map-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:14px 0}
+.map-toolbar .btn{padding:9px 14px;font-size:.92rem}
 .result-list{padding-left:20px}.pill{display:inline-block;padding:4px 9px;border-radius:20px;background:#e6f0e8;color:var(--green);font-size:.85rem;font-weight:700}
 footer{background:var(--dark);color:white;padding:34px 22px;text-align:center}
 @media(max-width:760px){.nav{flex-direction:column}nav{justify-content:center}.steps,.two-col{grid-template-columns:1fr}.hero{padding:62px 18px}}
@@ -72,7 +74,7 @@ footer{background:var(--dark);color:white;padding:34px 22px;text-align:center}
 <button id="revoke-button" class="btn hidden" type="button">Revoke Location Consent</button>
 </div>
 </div></section>
-<section id="map-section" class="soft"><div class="wrap"><h2>Multiflora Rose Location Map</h2><p>Community markers show only sightings whose submitters explicitly opted into public map display. Revoked and expired sightings are excluded; public coordinates are approximate.</p><div id="map"></div><p id="map-status" class="muted">Loading community sightings…</p></div></section>
+<section id="map-section" class="soft"><div class="wrap"><h2>Multiflora Rose Location Map</h2><p>Community markers show only sightings whose submitters explicitly opted into public map display. Revoked and expired sightings are excluded; public coordinates are approximate.</p><div class="map-toolbar"><p id="map-status" class="muted" aria-live="polite">Loading community sightings…</p><button id="refresh-map" class="btn" type="button">Refresh Map</button></div><div id="map"></div><p class="muted">The map checks for new public reports automatically about once per minute. You can also refresh it manually.</p></div></section>
 </main>
 <footer><p>ALLIED ALGORITHMS — A.I.M.</p><p>Identify responsibly. Share only with your permission.</p></footer>
 <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
@@ -83,6 +85,7 @@ let consentId = null;
 let map = null;
 let marker = null;
 const communityMarkers = [];
+let mapRefreshInProgress = false;
 
 function showStatus(id, message, error=false) {
   const el=$(id); el.textContent=message; el.classList.remove('hidden','error');
@@ -107,21 +110,23 @@ function initMap() {
   map.on('load', loadCommunitySightings);
 }
 async function loadCommunitySightings() {
-  if(!map) return;
-  $('map-status').textContent='Loading community sightings…';
+  if(!map || mapRefreshInProgress) return;
+  mapRefreshInProgress=true;
+  $('refresh-map').disabled=true;
+  $('map-status').textContent='Refreshing community sightings…';
   try {
-    // This public endpoint must return only active, map-authorized reports.
+    // The backend must return only active, map-authorized reports.
     const data=await api('/sightings/public');
+    if(!Array.isArray(data.sightings)) throw new Error('The backend response must contain a sightings array.');
     communityMarkers.forEach(item=>item.remove());
     communityMarkers.length=0;
-    const sightings=Array.isArray(data.sightings)?data.sightings:[];
-    sightings.forEach(sighting=>{
+    data.sightings.forEach(sighting=>{
       const latitude=Number(sighting.latitude);
       const longitude=Number(sighting.longitude);
-      if(!Number.isFinite(latitude)||!Number.isFinite(longitude)) return;
+      if(!Number.isFinite(latitude)||!Number.isFinite(longitude)||latitude < -90||latitude > 90||longitude < -180||longitude > 180) return;
       const reportedAt=sighting.reported_at||sighting.created_at;
       const dateLabel=reportedAt&&!Number.isNaN(Date.parse(reportedAt))
-        ? new Date(reportedAt).toLocaleDateString()
+        ? new Date(reportedAt).toLocaleString()
         : 'Date unavailable';
       const popupText=(sighting.species||'Multiflora Rose')+' — Reported: '+dateLabel;
       const item=new maplibregl.Marker({color:'#245c45'})
@@ -130,11 +135,15 @@ async function loadCommunitySightings() {
         .addTo(map);
       communityMarkers.push(item);
     });
-    $('map-status').textContent=sightings.length
-      ? 'Showing '+communityMarkers.length+' community sighting(s). Only active, map-authorized reports are included.'
-      : 'No active public sightings yet. Only reports with map-sharing permission appear here.';
+    const refreshedAt=new Date().toLocaleTimeString();
+    $('map-status').textContent=communityMarkers.length
+      ? 'Showing '+communityMarkers.length+' active public sighting(s). Last updated '+refreshedAt+'.'
+      : 'No active public sightings yet. Last checked '+refreshedAt+'.';
   } catch(error) {
-    $('map-status').textContent='Community reports are not available yet. The backend needs to add GET /sightings/public. ('+error.message+')';
+    $('map-status').textContent='Could not load community reports. Confirm that the backend has GET /sightings/public and returns { sightings: [...] }. '+error.message;
+  } finally {
+    mapRefreshInProgress=false;
+    $('refresh-map').disabled=false;
   }
 }
 $('scan-form').addEventListener('submit', async event=>{
@@ -206,6 +215,7 @@ $('submit-sighting').addEventListener('click',()=>{
     showStatus('consent-status',reason,true);
   },{enableHighAccuracy:true,timeout:15000,maximumAge:0});
 });
+$('refresh-map').addEventListener('click',loadCommunitySightings);
 $('revoke-button').addEventListener('click',async()=>{
   if(!consentId)return;
   try{
@@ -218,6 +228,7 @@ $('revoke-button').addEventListener('click',async()=>{
   }catch(error){showStatus('consent-status',error.message,true);}
 });
 initMap();
+setInterval(()=>{if(map&&map.loaded())loadCommunitySightings();},60000);
 </script>
 </body></html>"""
 
