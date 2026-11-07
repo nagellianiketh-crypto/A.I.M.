@@ -108,31 +108,34 @@ function initMap() {
 }
 async function loadCommunitySightings() {
   if(!map) return;
+  $('map-status').textContent='Loading community sightings…';
   try {
-    const data=await api('/sightings');
+    // This public endpoint must return only active, map-authorized reports.
+    const data=await api('/sightings/public');
     communityMarkers.forEach(item=>item.remove());
     communityMarkers.length=0;
-    (data.sightings||[]).forEach(sighting=>{
+    const sightings=Array.isArray(data.sightings)?data.sightings:[];
+    sightings.forEach(sighting=>{
+      const latitude=Number(sighting.latitude);
+      const longitude=Number(sighting.longitude);
+      if(!Number.isFinite(latitude)||!Number.isFinite(longitude)) return;
+      const reportedAt=sighting.reported_at||sighting.created_at;
+      const dateLabel=reportedAt&&!Number.isNaN(Date.parse(reportedAt))
+        ? new Date(reportedAt).toLocaleDateString()
+        : 'Date unavailable';
+      const popupText=(sighting.species||'Multiflora Rose')+' — Reported: '+dateLabel;
       const item=new maplibregl.Marker({color:'#245c45'})
-        .setLngLat([sighting.longitude,sighting.latitude])
-        .setPopup(new maplibregl.Popup().setText(sighting.species+' — '+new Date(sighting.created_at).toLocaleDateString()))
+        .setLngLat([longitude,latitude])
+        .setPopup(new maplibregl.Popup({offset:25}).setText(popupText))
         .addTo(map);
       communityMarkers.push(item);
     });
-    $('map-status').textContent=(data.sightings||[]).length
-      ? 'Showing '+data.sightings.length+' community sighting(s). Locations are approximate.'
-      : 'No active public sightings yet. Only map-authorized reports appear here.';
+    $('map-status').textContent=sightings.length
+      ? 'Showing '+communityMarkers.length+' community sighting(s). Only active, map-authorized reports are included.'
+      : 'No active public sightings yet. Only reports with map-sharing permission appear here.';
   } catch(error) {
-    $('map-status').textContent='Community map could not be loaded: '+error.message;
+    $('map-status').textContent='Community reports are not available yet. The backend needs to add GET /sightings/public. ('+error.message+')';
   }
-}
-function addMapMarker(longitude, latitude) {
-  initMap();
-  if(!map) return;
-  map.once('load',()=>{});
-  if(marker) marker.remove();
-  marker=new maplibregl.Marker({color:'#245c45'}).setLngLat([longitude,latitude]).addTo(map);
-  map.flyTo({center:[longitude,latitude],zoom:14});
 }
 $('scan-form').addEventListener('submit', async event=>{
   event.preventDefault();
@@ -193,7 +196,7 @@ $('submit-sighting').addEventListener('click',()=>{
         longitude:position.coords.longitude
       })});
       let message='Sighting submitted. Consent expires '+new Date(consent.expires_at).toLocaleString()+'.';
-      if(mapOpt){addMapMarker(position.coords.longitude,position.coords.latitude);await loadCommunitySightings();}
+      if(mapOpt){await loadCommunitySightings();if(map)map.flyTo({center:[position.coords.longitude,position.coords.latitude],zoom:13});}
       if(groupOpt) message+=' Environmental-group sharing was authorized, but automatic email/notifications are not yet implemented in the backend.';
       showStatus('consent-status',message);
       $('revoke-button').classList.remove('hidden');
@@ -210,8 +213,8 @@ $('revoke-button').addEventListener('click',async()=>{
     consentId=null;
     if(marker){marker.remove();marker=null;}
     $('revoke-button').classList.add('hidden');
-    $('map-status').textContent='Consent revoked. The backend confirms associated stored sightings were deleted.';
-    showStatus('consent-status','Your location consent has been revoked.');
+    await loadCommunitySightings();
+    showStatus('consent-status','Your location consent has been revoked. Your map-authorized report should no longer appear.');
   }catch(error){showStatus('consent-status',error.message,true);}
 });
 initMap();
@@ -223,7 +226,8 @@ ALLOWED_API = {
     "/health": {"GET"},
     "/scan": {"POST"},
     "/consent": {"POST"},
-    "/sightings": {"GET", "POST"},
+    "/sightings": {"POST"},
+    "/sightings/public": {"GET"},
     "/consent/revoke": {"POST"},
 }
 
